@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BOOM Whitelist Manager</title>
+    <link rel="icon" type="image/png" href="images/shibarium.png">
+    <style>
+        body { font-family: 'Arial', sans-serif; background: #f5f5f5; color: #333; margin: 0; padding: 0; display: flex; justify-content: center; align-items: flex-start; min-height: 100vh; }
+        .container { background: #fff; padding: 15px; width: 90%; max-width: 500px; text-align: center; margin: 10px auto; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1); border-radius: 15px; }
+        .header { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; }
+        .network { display: flex; align-items: center; font-size: 1em; font-weight: bold; color: #333; }
+        .network img { width: 20px; height: 20px; margin-right: 5px; }
+        .connect-section { margin: 15px 0; }
+        .connect-btn { background: #007bff; color: #fff; border: none; padding: 12px 25px; border-radius: 8px; cursor: pointer; font-size: 1em; width: 100%; box-sizing: border-box; }
+        .connect-btn:hover { background: #0056b3; }
+        .connect-btn.loading { opacity: 0.7; pointer-events: none; }
+        .status { margin-top: 10px; font-size: 0.9em; color: #666; }
+        .whitelist-section { margin: 20px 0; }
+        .whitelist-input { width: 100%; height: 200px; padding: 10px; border: 1px solid #ccc; border-radius: 4px; resize: vertical; font-family: 'Arial', sans-serif; font-size: 1em; box-sizing: border-box; }
+        .action-btn { padding: 10px 20px; background: #007bff; color: #fff; border: none; border-radius: 4px; cursor: pointer; margin-top: 10px; font-size: 1em; width: 100%; box-sizing: border-box; }
+        .action-btn:hover { background: #0056b3; }
+        .action-btn:disabled { background: #ccc; cursor: not-allowed; }
+        @media (max-width: 600px) {
+            .container { width: 100%; margin: 0; padding: 10px; border-radius: 0; box-shadow: none; }
+            .connect-btn, .action-btn { padding: 10px; font-size: 0.9em; }
+            .status { font-size: 0.8em; }
+            .whitelist-input { height: 150px; font-size: 0.9em; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="network">
+                <img src="images/shibarium.png" alt="Shibarium"> Shibarium
+            </div>
+            <div style="width: 24px;"></div>
+        </div>
+        <div class="connect-section" id="connectSection">
+            <button class="connect-btn" id="connectButton">Connect MetaMask</button>
+            <div id="networkStatus" class="status">Click to connect...</div>
+        </div>
+        <div class="whitelist-section" id="whitelistSection" style="display: none;">
+            <h2>Batch Add to Whitelist</h2>
+            <textarea class="whitelist-input" id="whitelistInput" placeholder="Enter one address per line (e.g., 0x123...)" spellcheck="false"></textarea>
+            <button class="action-btn" id="addWhitelistButton">Add to Whitelist</button>
+            <div id="whitelistStatus" class="status"></div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/web3@1.7.0/dist/web3.min.js"></script>
+    <script>
+        let web3, accounts;
+        const CONTRACT_ADDRESS = "0x493e6084f9373baF1D9BC85f82c2748a2459083b";
+        const shibarium = { chainId: 109, chainName: 'Shibarium', nativeCurrency: { name: 'BONE', symbol: 'BONE', decimals: 18 }, rpcUrls: ['https://rpc.shibrpc.com'], blockExplorerUrls: ['https://shibariumscan.io'] };
+
+        const BOOM_ABI = [
+            {"inputs":[{"internalType":"address[]","name":"addresses","type":"address[]"}],"name":"addToWhitelist","outputs":[],"stateMutability":"nonpayable","type":"function"},
+            {"inputs":[],"name":"owner","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"},
+            {"inputs":[{"internalType":"address","name":"addr","type":"address"}],"name":"isWhitelisted","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"view","type":"function"}
+        ];
+
+        async function connectWallet() {
+            const status = document.getElementById('networkStatus');
+            const connectButton = document.getElementById('connectButton');
+            try {
+                if (!window.ethereum) {
+                    status.innerHTML = 'No wallet detected. Please install <a href="https://metamask.io" target="_blank">MetaMask</a> and run via a local server (e.g., "npx serve").';
+                    throw new Error("No wallet detected");
+                }
+                if (!window.location.protocol.startsWith('http')) {
+                    status.innerHTML = 'Please run this page via a local server (e.g., "npx serve") to connect MetaMask.';
+                    throw new Error("Not running on a server");
+                }
+                connectButton.classList.add('loading');
+                status.innerText = "Connecting...";
+                web3 = new Web3(window.ethereum);
+                accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+                if (!accounts.length) throw new Error("Unlock or connect wallet in MetaMask.");
+                const chainId = await web3.eth.getChainId();
+                if (chainId !== 109) {
+                    try {
+                        await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: "0x6d" }] });
+                    } catch (switchError) {
+                        if (switchError.code === 4902) await window.ethereum.request({ method: 'wallet_addEthereumChain', params: [shibarium] });
+                        else throw switchError;
+                    }
+                }
+                connectButton.textContent = `Connected: ${accounts[0].slice(0, 6)}...${accounts[0].slice(-4)}`;
+                status.innerText = "Connected to Shibarium";
+                await checkOwner();
+            } catch (error) {
+                console.error("Connection error:", error.message);
+                status.innerText = "Failed: " + error.message;
+            } finally {
+                connectButton.classList.remove('loading');
+            }
+        }
+
+        async function checkOwner() {
+            const contract = new web3.eth.Contract(BOOM_ABI, CONTRACT_ADDRESS);
+            try {
+                const owner = await contract.methods.owner().call();
+                if (owner.toLowerCase() === accounts[0].toLowerCase()) {
+                    document.getElementById('connectSection').style.display = 'none';
+                    document.getElementById('whitelistSection').style.display = 'block';
+                    document.getElementById('networkStatus').innerText = "Owner connected";
+                } else {
+                    document.getElementById('networkStatus').innerText = "Only the contract owner can manage the whitelist.";
+                }
+            } catch (error) {
+                console.error("Error checking owner:", error.message);
+                document.getElementById('networkStatus').innerText = "Error checking ownership: " + error.message;
+            }
+        }
+
+        async function addToWhitelist() {
+            const input = document.getElementById('whitelistInput').value.trim();
+            const status = document.getElementById('whitelistStatus');
+            const button = document.getElementById('addWhitelistButton');
+            if (!input) {
+                status.innerText = "Please enter at least one address.";
+                return;
+            }
+
+            const addresses = input.split('\n').map(addr => addr.trim()).filter(addr => web3.utils.isAddress(addr));
+            if (addresses.length === 0) {
+                status.innerText = "No valid Ethereum addresses found.";
+                return;
+            }
+
+            button.disabled = true;
+            status.innerText = "Processing...";
+            const contract = new web3.eth.Contract(BOOM_ABI, CONTRACT_ADDRESS);
+
+            try {
+                const gasEstimate = await contract.methods.addToWhitelist(addresses).estimateGas({ from: accounts[0] });
+                await contract.methods.addToWhitelist(addresses).send({
+                    from: accounts[0],
+                    gas: Math.floor(gasEstimate * 1.2) // Add 20% buffer to gas estimate
+                });
+                status.innerText = `Successfully added ${addresses.length} address(es) to whitelist!`;
+                document.getElementById('whitelistInput').value = ''; // Clear input after success
+            } catch (error) {
+                console.error("Error adding to whitelist:", error.message);
+                status.innerText = "Failed: " + (error.message.includes("revert") ? "Transaction reverted. Check contract conditions." : error.message);
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        window.ethereum?.on('chainChanged', (chainId) => {
+            if (parseInt(chainId, 16) !== 109) {
+                document.getElementById('networkStatus').innerText = "Switched to wrong network. Please reconnect to Shibarium.";
+                document.getElementById('connectButton').textContent = 'Connect MetaMask';
+                document.getElementById('whitelistSection').style.display = 'none';
+                document.getElementById('connectSection').style.display = 'block';
+                web3 = null;
+                accounts = null;
+            } else {
+                connectWallet();
+            }
+        });
+
+        window.ethereum?.on('accountsChanged', (newAccounts) => {
+            if (newAccounts.length) {
+                connectWallet();
+            } else {
+                document.getElementById('networkStatus').innerText = "Wallet disconnected. Please reconnect.";
+                document.getElementById('connectButton').textContent = 'Connect MetaMask';
+                document.getElementById('whitelistSection').style.display = 'none';
+                document.getElementById('connectSection').style.display = 'block';
+                web3 = null;
+                accounts = null;
+            }
+        });
+
+        window.addEventListener('load', () => {
+            if (!window.location.protocol.startsWith('http')) {
+                document.getElementById('networkStatus').innerHTML = 'Please run this page via a local server (e.g., "npx serve") to connect MetaMask.';
+            } else if (!window.ethereum) {
+                document.getElementById('networkStatus').innerHTML = 'No wallet detected. Please install <a href="https://metamask.io" target="_blank">MetaMask</a>.';
+            }
+        });
+
+        document.getElementById('connectButton').addEventListener('click', connectWallet);
+        document.getElementById('addWhitelistButton').addEventListener('click', addToWhitelist);
+    </script>
+</body>
+</html>
